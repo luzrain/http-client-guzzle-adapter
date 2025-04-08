@@ -39,6 +39,7 @@ final class HttpClientBuilder
         }
 
         $connectContext = (new ConnectContext())->withTlsContext($this->getTlsContext($options));
+        $decodeContent = $options[RequestOptions::DECODE_CONTENT] !== false;
 
         if (isset($options[RequestOptions::FORCE_IP_RESOLVE])) {
             $connectContext->withDnsTypeRestriction(match ($options[RequestOptions::FORCE_IP_RESOLVE]) {
@@ -51,6 +52,7 @@ final class HttpClientBuilder
         return $this->cachedClients[$cacheKey] = $this->buildAmpHttpClient(
             connector: $this->getConnector($request->getUri()->getScheme(), $request->getUri()->getHost(), $options),
             connectContext: $connectContext,
+            compression: $decodeContent,
         );
     }
 
@@ -59,6 +61,7 @@ final class HttpClientBuilder
         if (isset($options[RequestOptions::CERT])
             || isset($options[RequestOptions::PROXY])
             || (isset($options[RequestOptions::VERIFY]) && $options[RequestOptions::VERIFY] !== true)
+            || (isset($options[RequestOptions::DECODE_CONTENT]) && $options[RequestOptions::DECODE_CONTENT] !== true)
             || isset($options[RequestOptions::FORCE_IP_RESOLVE])
         ) {
             $cacheKey = [];
@@ -66,6 +69,7 @@ final class HttpClientBuilder
                 RequestOptions::CERT,
                 RequestOptions::PROXY,
                 RequestOptions::VERIFY,
+                RequestOptions::DECODE_CONTENT,
                 RequestOptions::FORCE_IP_RESOLVE,
             ] as $k) {
                 $cacheKey[$k] = $options[$k] ?? null;
@@ -172,7 +176,7 @@ final class HttpClientBuilder
         return $tlsContext;
     }
 
-    private function buildAmpHttpClient(?SocketConnector $connector = null, ?ConnectContext $connectContext = null): DelegateHttpClient
+    private function buildAmpHttpClient(?SocketConnector $connector = null, ?ConnectContext $connectContext = null, bool $compression = false): DelegateHttpClient
     {
         $client = new PooledHttpClient(
             connectionPool: new UnlimitedConnectionPool(
@@ -182,6 +186,10 @@ final class HttpClientBuilder
                 )
             )
         );
+
+        if ($compression) {
+            $client = $client->intercept(new DecompressResponseInterceptor());
+        }
 
         return $client;
     }
