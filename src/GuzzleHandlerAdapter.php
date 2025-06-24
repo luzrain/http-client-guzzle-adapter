@@ -77,7 +77,7 @@ final class GuzzleHandlerAdapter
     public function __invoke(PsrRequest $request, array $options): PromiseInterface
     {
         if (isset($options['curl'])) {
-            throw new \RuntimeException("Cannot provide curl options when using AMP backend!");
+            throw new \RuntimeException('Cannot provide curl options when using AMP backend!');
         }
 
         $deferredCancellation = new DeferredCancellation();
@@ -92,12 +92,19 @@ final class GuzzleHandlerAdapter
             $ampRequest->setInactivityTimeout((float) ($options[RequestOptions::TIMEOUT] ?? 0));
             $ampRequest->setTcpConnectTimeout((float) ($options[RequestOptions::CONNECT_TIMEOUT] ?? 60));
 
-            $client = $this->httpClientBuilder->getClient($ampRequest, $options);
-
-            if (isset($options['amp']['protocols'])) {
-                $ampRequest->setProtocolVersions($options['amp']['protocols']);
+            if (null !== $ampProtocols = $options['amp']['protocols'] ?? null) {
+                $ampRequest->setProtocolVersions($ampProtocols);
             }
 
+            if (null !== $ampBodySizeLimit = $options['amp']['body_size_limit'] ?? null) {
+                $ampRequest->setBodySizeLimit($ampBodySizeLimit);
+            }
+
+            if (null !== $ampHeaderSizeLimit = $options['amp']['header_size_limit'] ?? null) {
+                $ampRequest->setHeaderSizeLimit($ampHeaderSizeLimit);
+            }
+
+            $client = $this->httpClientBuilder->getClient($ampRequest, $options);
             $response = $client->request($ampRequest, $cancellation);
 
             if (isset($options[RequestOptions::SINK])) {
