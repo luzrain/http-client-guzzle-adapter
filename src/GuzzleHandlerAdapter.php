@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Amp\Http\Client\GuzzleAdapter;
 
+use Amp\ByteStream\ClosedException;
+use Amp\ByteStream\ReadableResourceStream;
+use Amp\ByteStream\ReadableStream;
 use Amp\ByteStream\StreamException;
+use Amp\ByteStream\WritableResourceStream;
 use Amp\Cancellation;
 use Amp\CancelledException;
 use Amp\DeferredCancellation;
 use Amp\Dns\DnsException;
-use Amp\File\File;
-use Amp\File\FilesystemException;
 use Amp\Http\Client\Psr7\PsrAdapter;
 use Amp\Http\Client\Psr7\PsrHttpClientException;
 use Amp\Http\Client\Response;
@@ -31,7 +33,6 @@ use Psr\Http\Message\StreamInterface as PsrStream;
 use function Amp\async;
 use function Amp\ByteStream\pipe;
 use function Amp\delay;
-use function Amp\File\openFile;
 use Amp\Socket;
 
 /**
@@ -100,22 +101,22 @@ final class GuzzleHandlerAdapter
             $response = $client->request($ampRequest, $cancellation);
 
             if (isset($options[RequestOptions::SINK])) {
-                $filename = $options[RequestOptions::SINK];
-                if (!\is_string($filename)) {
-                    throw new \RuntimeException("Only a file name can be provided as sink!");
+                $file = $options[RequestOptions::SINK];
+                if (!\is_string($file) && !(\is_resource($file) && \get_resource_type($file) === 'stream') && !$file instanceof WritableResourceStream) {
+                    throw new \RuntimeException("Only file name, resource or WritableResourceStream can be provided as sink!");
                 }
 
                 try {
-                    $file = $this->pipeResponseToFile($response, $filename, $cancellation);
-                } catch (FilesystemException|StreamException $exception) {
+                    $fileStream = $this->pipeResponseToFile($response, $file, $cancellation);
+                } catch (ClosedException|StreamException $exception) {
                     throw new PsrHttpClientException(\sprintf(
                         'Failed streaming body to file "%s": %s',
-                        $filename,
+                        $file,
                         $exception->getMessage(),
                     ), request: $request, previous: $exception);
                 }
 
-                $response->setBody($file);
+                $response->setBody($fileStream);
             }
 
             return $this->psrAdapter->toPsrResponse($response);
@@ -161,16 +162,23 @@ final class GuzzleHandlerAdapter
         return $promise;
     }
 
-    private function pipeResponseToFile(Response $response, string $filename, Cancellation $cancellation): File
+    /**
+     * @param string|resource|WritableResourceStream $file
+     * @throws ClosedException
+     * @throws StreamException
+     */
+    private function pipeResponseToFile(Response $response, mixed $file, Cancellation $cancellation): ReadableStream
     {
-        if (!\interface_exists(File::class)) {
-            throw new \RuntimeException("Please require amphp/file to use the sink option!");
-        }
+        $fileResource = match (true) {
+            \is_string($file) => new WritableResourceStream(\fopen($file, 'w+be')),
+            \is_resource($file) => new WritableResourceStream($file),
+            default => $file,
+        };
 
-        $file = openFile($filename, 'w');
-        pipe($response->getBody(), $file, $cancellation);
-        $file->seek(0);
+        pipe($response->getBody(), $fileResource, $cancellation);
+        $resource = $fileResource->getResource();
+        \rewind($resource);
 
-        return $file;
+        return new ReadableResourceStream($resource);
     }
 }
