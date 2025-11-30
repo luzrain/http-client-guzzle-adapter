@@ -6,6 +6,13 @@ This package provides an adapter for Guzzle 7 to allow using [`amphp/http-client
 [![Latest Release](https://img.shields.io/github/release/amphp/http-client-guzzle-adapter.svg?style=flat-square)](https://github.com/amphp/http-client-guzzle-adapter/releases)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](https://github.com/amphp/http-client-guzzle-adapter/blob/1.x/LICENSE)
 
+> [!NOTE]
+> Differences from the original [amphp/http-client-guzzle-adapter](https://github.com/amphp/http-client-guzzle-adapter):
+> - The GuzzleHandlerAdapter constructor now accepts a SocketConnector instead of a DelegateHttpClient. The underlying HTTP client is now built internally. This change addresses an issue in the original design, where passing a preconfigured DelegateHttpClient was misleading: if additional Guzzle options were specified in a request, a completely new internal client would be created anyway, effectively ignoring the preconfigured one.
+> - Added `amp.body_size_limit` and `amp.header_size_limit` options.
+> - Implemented the `decode_content` guzzle option which is active by default.
+> - All Amp\Http\Client exceptions are now wrapped in GuzzleException to ensure compatibility with Guzzle clients that expect Guzzle exception handling
+
 ## Installation
 
 This package can be installed as a [Composer](https://getcomposer.org/) dependency.
