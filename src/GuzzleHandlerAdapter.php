@@ -5,14 +5,12 @@ declare(strict_types=1);
 namespace Amp\Http\Client\GuzzleAdapter;
 
 use Amp\ByteStream\ClosedException;
-use Amp\ByteStream\ReadableResourceStream;
-use Amp\ByteStream\ReadableStream;
 use Amp\ByteStream\StreamException;
-use Amp\ByteStream\WritableResourceStream;
 use Amp\Cancellation;
 use Amp\CancelledException;
 use Amp\DeferredCancellation;
 use Amp\Dns\DnsException;
+use Amp\File\File;
 use Amp\Http\Client\Psr7\PsrAdapter;
 use Amp\Http\Client\Psr7\PsrHttpClientException;
 use Amp\Http\Client\Response;
@@ -34,6 +32,7 @@ use function Amp\async;
 use function Amp\ByteStream\pipe;
 use function Amp\delay;
 use Amp\Socket;
+use function Amp\File\openFile;
 
 /**
  * Handler for guzzle which uses amphp/http-client.
@@ -109,8 +108,8 @@ final class GuzzleHandlerAdapter
 
             if (isset($options[RequestOptions::SINK])) {
                 $file = $options[RequestOptions::SINK];
-                if (!\is_string($file) && !(\is_resource($file) && \get_resource_type($file) === 'stream') && !$file instanceof WritableResourceStream) {
-                    throw new \RuntimeException("Only file name, resource or WritableResourceStream can be provided as sink!");
+                if (!\is_string($file)) {
+                    throw new \RuntimeException("Only a file name can be provided as sink!");
                 }
 
                 try {
@@ -169,23 +168,16 @@ final class GuzzleHandlerAdapter
         return $promise;
     }
 
-    /**
-     * @param string|resource|WritableResourceStream $file
-     * @throws ClosedException
-     * @throws StreamException
-     */
-    private function pipeResponseToFile(Response $response, mixed $file, Cancellation $cancellation): ReadableStream
+    private function pipeResponseToFile(Response $response, string $filename, Cancellation $cancellation): File
     {
-        $fileResource = match (true) {
-            \is_string($file) => new WritableResourceStream(\fopen($file, 'w+be')),
-            \is_resource($file) => new WritableResourceStream($file),
-            default => $file,
-        };
+        if (!\interface_exists(File::class)) {
+            throw new \RuntimeException("Please require amphp/file to use the sink option!");
+        }
 
-        pipe($response->getBody(), $fileResource, $cancellation);
-        $resource = $fileResource->getResource();
-        \rewind($resource);
+        $file = openFile($filename, 'w');
+        pipe($response->getBody(), $file, $cancellation);
+        $file->seek(0);
 
-        return new ReadableResourceStream($resource);
+        return $file;
     }
 }
