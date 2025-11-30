@@ -75,7 +75,7 @@ final class GuzzleHandlerAdapter
 
     public function __invoke(PsrRequest $request, array $options): PromiseInterface
     {
-        if (isset($options['curl'])) {
+        if (isset($options['curl']) && !empty($options['curl'])) {
             throw new \RuntimeException('Cannot provide curl options when using AMP backend!');
         }
 
