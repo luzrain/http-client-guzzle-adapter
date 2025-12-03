@@ -2,16 +2,10 @@
 
 namespace Amp\Http\Client\GuzzleAdapter;
 
-use Amp\Http\Client\DelegateHttpClient;
-use Amp\Http\Client\Interceptor\FollowRedirects;
-use Amp\Http\Client\Interceptor\RetryRequests;
-use Amp\Http\Client\Request as AmpRequest;
 use Amp\PHPUnit\AsyncTestCase;
 use GuzzleHttp\Client;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\PromiseInterface;
-use GuzzleHttp\Psr7\Request;
-use GuzzleHttp\RedirectMiddleware;
 use function Amp\async;
 use function Amp\delay;
 

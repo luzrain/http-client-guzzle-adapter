@@ -11,10 +11,12 @@ use Amp\CancelledException;
 use Amp\DeferredCancellation;
 use Amp\Dns\DnsException;
 use Amp\File\File;
+use Amp\Http\Client\ApplicationInterceptor;
 use Amp\Http\Client\Psr7\PsrAdapter;
 use Amp\Http\Client\Psr7\PsrHttpClientException;
 use Amp\Http\Client\Response;
 use Amp\Http\Client\TimeoutException;
+use Amp\Socket;
 use Amp\Socket\SocketConnector;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
@@ -31,7 +33,6 @@ use Psr\Http\Message\StreamInterface as PsrStream;
 use function Amp\async;
 use function Amp\ByteStream\pipe;
 use function Amp\delay;
-use Amp\Socket;
 use function Amp\File\openFile;
 
 /**
@@ -46,13 +47,16 @@ final class GuzzleHandlerAdapter
 
     private PsrAdapter $psrAdapter;
 
-    public function __construct(?SocketConnector $connector = null)
+    /**
+     * @param array<ApplicationInterceptor> $interceptors
+     */
+    public function __construct(?SocketConnector $connector = null, array $interceptors = [])
     {
         if (!\interface_exists(PromiseInterface::class)) {
             throw new \RuntimeException("Please require guzzlehttp/guzzle to use the Guzzle adapter!");
         }
 
-        $this->httpClientBuilder = new HttpClientBuilder($connector ?? Socket\socketConnector());
+        $this->httpClientBuilder = new HttpClientBuilder($connector ?? Socket\socketConnector(), $interceptors);
 
         /** @var \WeakMap<PsrStream, DeferredCancellation> */
         $this->deferredCancellations = new \WeakMap();
@@ -154,7 +158,7 @@ final class GuzzleHandlerAdapter
                         $e = new ConnectException($e->getMessage(), $request, $e);
                     } elseif ($e->getPrevious()?->getPrevious() instanceof DnsException) {
                         // Wrap DNS resolution exception to ConnectException
-                        $e = new ConnectException($e->getPrevious()->getMessage(), $request, $e);
+                        $e = new ConnectException($e->getPrevious()?->getMessage() ?? '', $request, $e);
                     } else {
                         $e = RequestException::wrapException($request, $e);
                     }

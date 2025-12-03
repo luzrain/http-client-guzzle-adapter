@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Amp\Http\Client\GuzzleAdapter;
 
 use Amp\Dns\DnsRecord;
+use Amp\Http\Client\ApplicationInterceptor;
 use Amp\Http\Client\Connection\DefaultConnectionFactory;
 use Amp\Http\Client\Connection\UnlimitedConnectionPool;
 use Amp\Http\Client\DelegateHttpClient;
+use Amp\Http\Client\InterceptedHttpClient;
 use Amp\Http\Client\PooledHttpClient;
 use Amp\Http\Client\Request as AmpRequest;
 use Amp\Http\Tunnel\Http1TunnelConnector;
@@ -26,7 +28,10 @@ final class HttpClientBuilder
     /** @var array<string, DelegateHttpClient> */
     private array $cachedClients = [];
 
-    public function __construct(private SocketConnector $connector)
+    /**
+     * @param array<ApplicationInterceptor> $interceptors
+     */
+    public function __construct(private SocketConnector $connector, private array $interceptors = [])
     {
     }
 
@@ -189,6 +194,10 @@ final class HttpClientBuilder
 
         if ($compression) {
             $client = $client->intercept(new DecompressResponseInterceptor());
+        }
+
+        foreach (\array_reverse($this->interceptors) as $applicationInterceptor) {
+            $client = new InterceptedHttpClient($client, $applicationInterceptor, []);
         }
 
         return $client;
