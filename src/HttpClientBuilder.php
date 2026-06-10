@@ -80,7 +80,7 @@ final class HttpClientBuilder
                 $cacheKey[$k] = $options[$k] ?? null;
             }
 
-            return \hash('xxh64', \json_encode($cacheKey));
+            return \hash('xxh3', \json_encode($cacheKey));
         }
 
         return '0000000000000000';
