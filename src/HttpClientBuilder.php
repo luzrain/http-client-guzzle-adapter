@@ -14,6 +14,7 @@ use Amp\Http\Client\PooledHttpClient;
 use Amp\Http\Client\Request as AmpRequest;
 use Amp\Http\Tunnel\Http1TunnelConnector;
 use Amp\Http\Tunnel\Https1TunnelConnector;
+use Amp\Socket;
 use Amp\Socket\Certificate;
 use Amp\Socket\ClientTlsContext;
 use Amp\Socket\ConnectContext;
@@ -31,20 +32,32 @@ final class HttpClientBuilder
     /**
      * @param array<ApplicationInterceptor> $interceptors
      */
-    public function __construct(private SocketConnector $connector, private array $interceptors = [])
+    public function __construct(private SocketConnector|null $connector = null, private array $interceptors = [])
     {
+        $this->connector ??= Socket\socketConnector();
     }
 
     public function getClient(AmpRequest $request, array $options): DelegateHttpClient
     {
-        $cacheKey = $this->createKeyFromOptions($options);
+        $requestScheme = $request->getUri()->getScheme();
+        $requestHost = $request->getUri()->getHost();
+        $proxyOption = $options[RequestOptions::PROXY] ?? null;
+
+        if (\is_string($proxyOption)) {
+            $proxy = $proxyOption;
+        } elseif (\is_array($proxyOption) && isset($proxyOption[$requestScheme]) && (!isset($proxyOption['no']) || !Utils::isHostInNoProxy($requestHost, $proxyOption['no']))) {
+            $proxy = $proxyOption[$requestScheme];
+        } else {
+            $proxy = null;
+        }
+
+        $cacheKey = $this->createKeyFromOptions($options, $proxy);
 
         if (isset($this->cachedClients[$cacheKey])) {
             return $this->cachedClients[$cacheKey];
         }
 
         $connectContext = (new ConnectContext())->withTlsContext($this->getTlsContext($options));
-        $decodeContent = $options[RequestOptions::DECODE_CONTENT] !== false;
 
         if (isset($options[RequestOptions::FORCE_IP_RESOLVE])) {
             $connectContext->withDnsTypeRestriction(match ($options[RequestOptions::FORCE_IP_RESOLVE]) {
@@ -54,14 +67,29 @@ final class HttpClientBuilder
             });
         }
 
-        return $this->cachedClients[$cacheKey] = $this->buildAmpHttpClient(
-            connector: $this->getConnector($request->getUri()->getScheme(), $request->getUri()->getHost(), $options),
-            connectContext: $connectContext,
-            compression: $decodeContent,
+        $client = new PooledHttpClient(
+            connectionPool: new UnlimitedConnectionPool(
+                connectionFactory: new DefaultConnectionFactory(
+                    connector: $proxy === null ? $this->connector : $this->getProxyConnector($this->connector, $proxy),
+                    connectContext: $connectContext,
+                )
+            )
         );
+
+        if (isset($options[RequestOptions::DECODE_CONTENT]) && $options[RequestOptions::DECODE_CONTENT] !== false) {
+            $client = $client->intercept(new DecompressResponseInterceptor());
+        }
+
+        foreach (\array_reverse($this->interceptors) as $applicationInterceptor) {
+            $client = new InterceptedHttpClient($client, $applicationInterceptor, []);
+        }
+
+        $this->cachedClients[$cacheKey] = $client;
+
+        return $client;
     }
 
-    private function createKeyFromOptions(array $options): string
+    private function createKeyFromOptions(array $options, string|null $proxy): string
     {
         if (isset($options[RequestOptions::CERT])
             || isset($options[RequestOptions::PROXY])
@@ -69,7 +97,7 @@ final class HttpClientBuilder
             || (isset($options[RequestOptions::DECODE_CONTENT]) && $options[RequestOptions::DECODE_CONTENT] !== true)
             || isset($options[RequestOptions::FORCE_IP_RESOLVE])
         ) {
-            $cacheKey = [];
+            $cacheKey = ['proxy_uri' => $proxy];
             foreach ([
                 RequestOptions::CERT,
                 RequestOptions::PROXY,
@@ -86,24 +114,8 @@ final class HttpClientBuilder
         return '0000000000000000';
     }
 
-    private function getConnector(string $scheme, string $host, array $options): SocketConnector
+    private function getProxyConnector(SocketConnector $connector, string $proxy): SocketConnector
     {
-        if (!isset($options[RequestOptions::PROXY])) {
-            return $this->connector;
-        }
-
-        if (!\is_array($options[RequestOptions::PROXY])) {
-            $proxy = $options[RequestOptions::PROXY];
-        } elseif (isset($options[RequestOptions::PROXY][$scheme]) && (!isset($options[RequestOptions::PROXY]['no']) || !Utils::isHostInNoProxy($host, $options[RequestOptions::PROXY]['no']))) {
-            $proxy = $options[RequestOptions::PROXY][$scheme];
-        } else {
-            return $this->connector;
-        }
-
-        if (!\class_exists(Https1TunnelConnector::class)) {
-            throw new \RuntimeException("Please require amphp/http-tunnel to use the proxy option!");
-        }
-
         $uri = new GuzzleUri($proxy);
         $scheme = $uri->getScheme();
         $host = $uri->getHost();
@@ -116,11 +128,12 @@ final class HttpClientBuilder
             if ($userInfo !== '') {
                 [$user, $password] = \explode(':', $userInfo, 2) + [null, null];
             }
+
             return new Socks5SocketConnector(
-                proxyAddress: $host . ':' . $port,
+                proxyAddress: "$host:$port",
                 username: $user,
                 password: $password,
-                socketConnector: $this->connector,
+                socketConnector: $connector,
             );
         }
 
@@ -130,26 +143,34 @@ final class HttpClientBuilder
         }
 
         if ($scheme === 'http') {
+            if (!\class_exists(Http1TunnelConnector::class)) {
+                throw new \RuntimeException('Please require amphp/http-tunnel to use the http proxy option!');
+            }
+
             return new Http1TunnelConnector(
-                proxyAddress: $host . ':' . $port,
+                proxyAddress: "$host:$port",
                 customHeaders: $headers,
-                socketConnector: $this->connector,
+                socketConnector: $connector,
             );
         }
 
         if ($scheme === 'https') {
+            if (!\class_exists(Https1TunnelConnector::class)) {
+                throw new \RuntimeException('Please require amphp/http-tunnel to use the https proxy option!');
+            }
+
             return new Https1TunnelConnector(
-                proxyAddress: $host . ':' . $port,
+                proxyAddress: "$host:$port",
                 proxyTlsContext: new ClientTlsContext($host),
                 customHeaders: $headers,
-                socketConnector: $this->connector,
+                socketConnector: $connector,
             );
         }
 
-        throw new \ValueError('Unsupported protocol in proxy option: ' . $scheme);
+        throw new \RuntimeException(\sprintf('Unsupported protocol in proxy option: %s', $scheme));
     }
 
-    private function getTlsContext(array $options): ?ClientTlsContext
+    private function getTlsContext(array $options): ClientTlsContext|null
     {
         $tlsContext = null;
 
@@ -179,27 +200,5 @@ final class HttpClientBuilder
         }
 
         return $tlsContext;
-    }
-
-    private function buildAmpHttpClient(?SocketConnector $connector = null, ?ConnectContext $connectContext = null, bool $compression = false): DelegateHttpClient
-    {
-        $client = new PooledHttpClient(
-            connectionPool: new UnlimitedConnectionPool(
-                connectionFactory: new DefaultConnectionFactory(
-                    connector: $connector,
-                    connectContext: $connectContext,
-                )
-            )
-        );
-
-        if ($compression) {
-            $client = $client->intercept(new DecompressResponseInterceptor());
-        }
-
-        foreach (\array_reverse($this->interceptors) as $applicationInterceptor) {
-            $client = new InterceptedHttpClient($client, $applicationInterceptor, []);
-        }
-
-        return $client;
     }
 }

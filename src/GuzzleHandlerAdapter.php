@@ -16,7 +16,6 @@ use Amp\Http\Client\Psr7\PsrAdapter;
 use Amp\Http\Client\Psr7\PsrHttpClientException;
 use Amp\Http\Client\Response;
 use Amp\Http\Client\TimeoutException;
-use Amp\Socket;
 use Amp\Socket\SocketConnector;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
@@ -50,13 +49,9 @@ final class GuzzleHandlerAdapter
     /**
      * @param array<ApplicationInterceptor> $interceptors
      */
-    public function __construct(?SocketConnector $connector = null, array $interceptors = [])
+    public function __construct(SocketConnector|null $connector = null, array $interceptors = [])
     {
-        if (!\interface_exists(PromiseInterface::class)) {
-            throw new \RuntimeException("Please require guzzlehttp/guzzle to use the Guzzle adapter!");
-        }
-
-        $this->httpClientBuilder = new HttpClientBuilder($connector ?? Socket\socketConnector(), $interceptors);
+        $this->httpClientBuilder = new HttpClientBuilder($connector, $interceptors);
 
         /** @var \WeakMap<PsrStream, DeferredCancellation> */
         $this->deferredCancellations = new \WeakMap();
@@ -87,7 +82,7 @@ final class GuzzleHandlerAdapter
         $cancellation = $deferredCancellation->getCancellation();
         $future = async(function () use ($request, $options, $cancellation): PsrResponse {
             if (isset($options[RequestOptions::DELAY])) {
-                delay($options[RequestOptions::DELAY] / 1000.0, cancellation: $cancellation);
+                delay($options[RequestOptions::DELAY] * 0.001, cancellation: $cancellation);
             }
 
             $ampRequest = $this->psrAdapter->fromPsrRequest($request);
@@ -160,7 +155,7 @@ final class GuzzleHandlerAdapter
                         // Wrap DNS resolution exception to ConnectException
                         $e = new ConnectException($e->getPrevious()?->getMessage() ?? '', $request, $e);
                     } else {
-                        $e = RequestException::wrapException($request, $e);
+                        $e = new RequestException($e->getMessage(), $request, null, $e);
                     }
 
                     $promise->reject($e);
@@ -175,7 +170,7 @@ final class GuzzleHandlerAdapter
     private function pipeResponseToFile(Response $response, string $filename, Cancellation $cancellation): File
     {
         if (!\interface_exists(File::class)) {
-            throw new \RuntimeException("Please require amphp/file to use the sink option!");
+            throw new \RuntimeException('Please require amphp/file to use the sink option!');
         }
 
         $file = openFile($filename, 'w');
